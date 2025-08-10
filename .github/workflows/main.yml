@@ -1,13 +1,18 @@
-name: Go CI/CD Pipeline
+name: Go CI/CD Pipeline with Docker
 
 on:
   push:
+    branches: ["main", "develop"]
+  pull_request:
     branches: ["main"]
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
+jobs:
+  test:
+    runs-on: ubuntu-latest
     steps:
       # 1. Checkout code
       - name: Checkout repository
@@ -17,7 +22,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: '1.24'
 
       # 3. Install dependencies
       - name: Install dependencies
@@ -25,13 +30,68 @@ jobs:
 
       # 4. Run tests
       - name: Run tests
-        run: go test ./... || true
+        run: go test ./...
 
-      # 5. Build binary
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # 1. Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 3. Log in to Container Registry
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 4. Extract metadata
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+
+      # 5. Build and push Docker image
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 6. Build binary (keeping original functionality)
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Install dependencies
+        run: go mod tidy
+
       - name: Build
         run: go build -o my-go-app .
 
-      # 6. Upload build artifact
+      # 7. Upload build artifact
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
